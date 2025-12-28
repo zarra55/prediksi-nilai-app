@@ -3,5 +3,4 @@ pandas==2.2.0
 numpy
 scikit-learn
 joblib
-mysql-connector
-mysql-connector-python
+mysql-connector-python==8.0.33
