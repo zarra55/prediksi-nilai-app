@@ -1,5 +1,5 @@
 import streamlit as st
-import mysql.connector # Library untuk hubungin ke DB
+import sqlite3 # Library untuk SQLite
 from datetime import datetime 
 import numpy as np 
 import pandas as pd 
@@ -182,30 +182,52 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def get_db_connection():
-    return mysql.connector.connect(
-        host=st.secrets["mysql"]["host"],
-        user=st.secrets["mysql"]["user"],
-        password=st.secrets["mysql"]["password"],
-        database=st.secrets["mysql"]["database"]
-    )
+    conn = sqlite3.connect('prediksi_nilai.db')
+    conn.row_factory = sqlite3.Row
+    # Buat tabel jika belum ada
+    with conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS login_users (
+            id_user INTEGER PRIMARY KEY AUTOINCREMENT,
+            nama_lengkap TEXT,
+            nis TEXT,
+            kelas TEXT,
+            email TEXT UNIQUE,
+            password TEXT
+        )''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS data_input (
+            id_input INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            presensi REAL,
+            nilai_uts REAL,
+            nilai_uas REAL,
+            nilai_tugas REAL,
+            jam_belajar REAL,
+            FOREIGN KEY(user_id) REFERENCES login_users(id_user)
+        )''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS hasil_prediksi (
+            id_hasil INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            id_input INTEGER,
+            nilai_prediksi REAL,
+            grade TEXT,
+            tanggal_prediksi TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES login_users(id_user),
+            FOREIGN KEY(id_input) REFERENCES data_input(id_input)
+        )''')
+    return conn
 
 # Fungsi untuk simpan ke database
 def simpan_ke_db(user_id, presensi, uts, uas, tugas, jam, hasil, grade):
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     # Simpan ke tabel data_input
-    # 1. Simpan ke data_input
     query_input = """INSERT INTO data_input (user_id, presensi, nilai_uts, nilai_uas, nilai_tugas, jam_belajar) 
-                     VALUES (%s, %s, %s, %s, %s, %s)"""
+                     VALUES (?, ?, ?, ?, ?, ?)"""
     cursor.execute(query_input, (user_id, presensi, uts, uas, tugas, jam))
     id_input_terakhir = cursor.lastrowid
-    
     # Simpan ke tabel hasil_prediksi
-    # 2. Simpan ke hasil_prediksi (tambahkan kolom grade)
-    query_hasil = "INSERT INTO hasil_prediksi (user_id, id_input, nilai_prediksi, grade) VALUES (%s, %s, %s, %s)"
+    query_hasil = "INSERT INTO hasil_prediksi (user_id, id_input, nilai_prediksi, grade) VALUES (?, ?, ?, ?)"
     cursor.execute(query_hasil, (user_id, id_input_terakhir, hasil, grade))
-    
     conn.commit()
     conn.close()
 
@@ -227,15 +249,14 @@ def go_to_page(page_name):
 # Fungsi login
 def login(email, password):
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    # Cari user berdasarkan email dan password
-    query = "SELECT * FROM login_users WHERE email = %s AND password = %s"
+    cursor = conn.cursor()
+    query = "SELECT * FROM login_users WHERE email = ? AND password = ?"
     cursor.execute(query, (email, password))
-    user = cursor.fetchone()
+    row = cursor.fetchone()
     conn.close()
-    
-    if user:
-        st.session_state.user = user # id_user sekarang ada di sini
+    if row:
+        user = dict(zip([column[0] for column in cursor.description], row))
+        st.session_state.user = user
         go_to_page('prediction')
         return True
     return False
@@ -245,17 +266,22 @@ def register(nama, nis, kelas, email, password):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        query = "INSERT INTO login_users (nama_lengkap, nis, kelas, email, password) VALUES (%s, %s, %s, %s, %s)"
+        query = "INSERT INTO login_users (nama_lengkap, nis, kelas, email, password) VALUES (?, ?, ?, ?, ?)"
         cursor.execute(query, (nama, nis, kelas, email, password))
         conn.commit()
         new_id = cursor.lastrowid
         conn.close()
-        
-        # Otomatis login setelah daftar
         st.session_state.user = {'id_user': new_id, 'nama_lengkap': nama, 'email': email, 'nis': nis, 'kelas': kelas}
         go_to_page('prediction')
         return True
-    except:
+    except sqlite3.IntegrityError as e:
+        if 'UNIQUE constraint failed: login_users.email' in str(e):
+            st.error('Email sudah terdaftar!')
+        else:
+            st.error(f'Gagal registrasi: {e}')
+        return False
+    except Exception as e:
+        st.error(f'Gagal registrasi: {e}')
         return False
 # Fungsi logout
 def logout():
@@ -458,19 +484,17 @@ def prediction_page():
         st.markdown('<h2 class="section-title">Riwayat Prediksi</h2>', unsafe_allow_html=True)
         
         conn = get_db_connection()
-        # Query untuk menggabungkan input dan hasil berdasarkan user yang login
-        query = """
+        query = '''
             SELECT h.tanggal_prediksi AS Tanggal, d.nilai_uts AS UTS, d.nilai_uas AS UAS, 
                    d.nilai_tugas AS Tugas, d.jam_belajar AS Jam, 
-                   h.nilai_prediksi AS 'Nilai Akhir', h.grade AS Grade
+                   h.nilai_prediksi AS "Nilai Akhir", h.grade AS Grade
             FROM hasil_prediksi h
             JOIN data_input d ON h.id_input = d.id_input
-            WHERE h.user_id = %s
+            WHERE h.user_id = ?
             ORDER BY h.tanggal_prediksi DESC
-        """
-        df_riwayat = pd.read_sql(query, conn, params=(st.session_state.user['id_user'],))
+        '''
+        df_riwayat = pd.read_sql_query(query, conn, params=(st.session_state.user['id_user'],))
         conn.close()
-
         if df_riwayat.empty:
             st.info("Belum ada riwayat prediksi untuk akun ini.")
         else:
