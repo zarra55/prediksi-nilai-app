@@ -22,6 +22,7 @@ def load_model():
     poly = joblib.load(poly_path)
     return model, poly
 
+
 # Konfigurasi halaman
 st.set_page_config(
     page_title="Prediksi Nilai Akhir Semester",
@@ -29,6 +30,22 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# --- TOMBOL RESET DATABASE (khusus developer/admin) ---
+def reset_database():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM hasil_prediksi')
+    cursor.execute('DELETE FROM data_input')
+    cursor.execute('DELETE FROM login_users')
+    conn.commit()
+    conn.close()
+
+with st.sidebar:
+    st.markdown('---')
+    if st.button('🔴 Reset Database (Admin)', help='Hapus semua user & data!'):
+        reset_database()
+        st.success('Database berhasil direset! Silakan daftar ulang.')
 
 # Custom CSS
 st.markdown("""
@@ -182,7 +199,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def get_db_connection():
-    conn = sqlite3.connect('prediksi_nilai.db')
+    conn = sqlite3.connect('prediksi_nilai_v2.db')
     conn.row_factory = sqlite3.Row
     # Buat tabel jika belum ada
     with conn:
